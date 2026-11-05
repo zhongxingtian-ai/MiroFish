@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from enum import Enum
 from dataclasses import dataclass, field, asdict
 from ..config import Config
+from ..utils.storage_paths import StoragePathError, storage_path, safe_child_path, validate_storage_id, validate_tree
 
 
 class ProjectStatus(str, Enum):
@@ -118,22 +119,22 @@ class ProjectManager:
     @classmethod
     def _get_project_dir(cls, project_id: str) -> str:
         """获取项目目录路径"""
-        return os.path.join(cls.PROJECTS_DIR, project_id)
+        return str(storage_path(cls.PROJECTS_DIR, project_id))
     
     @classmethod
     def _get_project_meta_path(cls, project_id: str) -> str:
         """获取项目元数据文件路径"""
-        return os.path.join(cls._get_project_dir(project_id), 'project.json')
+        return str(safe_child_path(cls._get_project_dir(project_id), 'project.json'))
     
     @classmethod
     def _get_project_files_dir(cls, project_id: str) -> str:
         """获取项目文件存储目录"""
-        return os.path.join(cls._get_project_dir(project_id), 'files')
+        return str(safe_child_path(cls._get_project_dir(project_id), 'files'))
     
     @classmethod
     def _get_project_text_path(cls, project_id: str) -> str:
         """获取项目提取文本存储路径"""
-        return os.path.join(cls._get_project_dir(project_id), 'extracted_text.txt')
+        return str(safe_child_path(cls._get_project_dir(project_id), 'extracted_text.txt'))
     
     @classmethod
     def create_project(cls, name: str = "Unnamed Project") -> Project:
@@ -211,11 +212,16 @@ class ProjectManager:
         Returns:
             项目列表，按创建时间倒序
         """
-        cls._ensure_projects_dir()
+        if not os.path.isdir(cls.PROJECTS_DIR):
+            return []
         
         projects = []
         for project_id in os.listdir(cls.PROJECTS_DIR):
-            project = cls.get_project(project_id)
+            try:
+                validate_storage_id(project_id)
+                project = cls.get_project(project_id)
+            except StoragePathError:
+                continue
             if project:
                 projects.append(project)
         
@@ -250,7 +256,7 @@ class ProjectManager:
         if not os.path.exists(project_dir):
             return False
         
-        shutil.rmtree(project_dir)
+        shutil.rmtree(validate_tree(project_dir))
         return True
     
     @classmethod
@@ -272,7 +278,7 @@ class ProjectManager:
         # 生成安全的文件名
         ext = os.path.splitext(original_filename)[1].lower()
         safe_filename = f"{uuid.uuid4().hex[:8]}{ext}"
-        file_path = os.path.join(files_dir, safe_filename)
+        file_path = str(safe_child_path(files_dir, safe_filename))
         
         # 保存文件
         file_storage.save(file_path)
@@ -314,7 +320,7 @@ class ProjectManager:
             return []
         
         return [
-            os.path.join(files_dir, f) 
+            str(safe_child_path(files_dir, f))
             for f in os.listdir(files_dir) 
-            if os.path.isfile(os.path.join(files_dir, f))
+            if os.path.isfile(str(safe_child_path(files_dir, f)))
         ]

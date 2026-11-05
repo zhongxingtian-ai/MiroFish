@@ -122,10 +122,15 @@ LLM_API_KEY=your_api_key
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL_NAME=qwen-plus
 
-# Zep Cloud Configuration
-# Free monthly quota is sufficient for simple usage: https://app.getzep.com/
-ZEP_API_KEY=your_zep_api_key
+# Optional local memory directory (default: backend/uploads/memory)
+# MEMORY_DATA_DIR=
 ```
+
+The default memory backend is local SQLite. No Zep account, API key, SDK, vector database, or database server is required. Each graph has its own file at backend/uploads/memory/<graph_id>.sqlite3; MEMORY_DATA_DIR optionally changes that directory. Nodes, relationships, original document/activity text, source links, and ingestion status survive backend restarts. Deleting a graph removes its local memory file; existing Zep Cloud data is not migrated.
+
+Retrieval matches literal keywords and adjacent Chinese two-character fragments, ignoring case and full-width/half-width differences. It does not understand synonyms or perform vector/semantic search. Empty queries are rejected, unmatched queries return no records, queries are limited to 400 characters, and each retrieval source returns at most 50 hits. Graph search reads nodes/relationships; report tools also search successfully processed simulation originals using the same matching rules, labelled with episode ID, timestamp, and source. Failed or pending activities are retained for diagnosis and are not presented as completed report evidence. The intended scale is hundreds to thousands of records per graph; retrieval scans records locally.
+
+Memory files stay on this machine. Extraction, simulation, and report generation still send their inputs to the configured LLM API. Keep the memory directory private and back it up with your project data; do not commit databases, original materials, .env files, logs, or local task reports.
 
 #### 2. Install Dependencies
 
@@ -164,17 +169,7 @@ npm run frontend  # Start frontend only
 
 ### Option 2: Docker Deployment
 
-```bash
-# 1. Configure environment variables (same as source deployment)
-cp .env.example .env
-
-# 2. Pull image and start
-docker compose up -d
-```
-
-Reads `.env` from root directory by default, maps ports `3000 (frontend) / 5001 (backend)`
-
-> Mirror address for faster pulling is provided as comments in `docker-compose.yml`, replace if needed.
+This SQLite fork is verified using source deployment above. The upstream prebuilt image referenced by the existing docker-compose.yml does not include these changes; use source deployment for the local-memory version.
 
 ## 📬 Join the Conversation
 

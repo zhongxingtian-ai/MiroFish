@@ -119,3 +119,40 @@ def test_extraction_caps_entity_and_relation_counts():
     assert len(result.relations) == 100
     assert result.entities[-1].name == "人物49"
     assert result.relations[-1].fact == "事实99"
+
+
+@pytest.mark.parametrize("payload", [{}, {"entities": []}, {"relations": []},
+    {"entities": "invalid", "relations": []}, {"entities": [], "relations": {}},
+    {"entities": None, "relations": []}, {"entities": [], "relations": None}])
+def test_invalid_top_level_extraction_schema_raises_instead_of_becoming_empty_success(payload):
+    memory = importlib.import_module("app.memory")
+    from app.utils.llm_client import LLMResponseError
+
+    with pytest.raises(LLMResponseError):
+        memory.GraphExtractor(llm_client=FixedLLM(payload)).extract(SOURCE_TEXT, ONTOLOGY, [])
+
+
+def test_explicit_empty_entity_and_relation_arrays_are_a_valid_empty_extraction():
+    memory = importlib.import_module("app.memory")
+    result = memory.GraphExtractor(llm_client=FixedLLM({"entities": [], "relations": []})).extract("无具名人物", ONTOLOGY, [])
+    assert result.entities == ()
+    assert result.relations == ()
+
+
+@pytest.mark.parametrize("payload", [{}, {"entities": "invalid", "relations": {}}])
+def test_invalid_extraction_schema_keeps_the_original_failed_and_batch_incomplete(tmp_path, monkeypatch, payload):
+    from memory_test_support import memory_case, create_graph
+    from app.services.graph_builder import GraphBuilderService
+
+    case = memory_case(tmp_path, monkeypatch)
+    graph_id = create_graph(case)
+    builder = GraphBuilderService(store=case.store, extractor=case.memory.GraphExtractor(llm_client=FixedLLM(payload)))
+    submission = builder.add_text_batches(graph_id, [SOURCE_TEXT])
+    with pytest.raises(RuntimeError):
+        builder._wait_for_batch(submission)
+    restarted = case.memory.LocalGraphStore()
+    original = restarted.get_episode(graph_id, submission.episode_uuids[0])
+    assert original.status == "failed"
+    assert original.content == SOURCE_TEXT
+    assert restarted.batch_progress(graph_id, submission.operation_id).status != "succeeded"
+    assert restarted.list_nodes(graph_id) == []

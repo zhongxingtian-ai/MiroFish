@@ -58,3 +58,10 @@ backend/uploads/
 
 # Docker 数据
 data/
+
+# 本地任务记录和记忆数据库（可能包含原始材料及模拟发言）
+.keel/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

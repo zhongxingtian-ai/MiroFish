@@ -1,23 +1,22 @@
 """
-Zep图谱记忆更新服务
-将模拟中的Agent活动动态更新到Zep图谱中
+本地记忆图谱记忆更新服务
+将模拟中的Agent活动动态更新到本地记忆图谱中
 """
 
 import time
+import uuid
 import threading
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from queue import Queue, Empty
 
-from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_locale, set_locale
-from ..utils.zep import (
-    ZEP_INGESTION_WAIT_TIMEOUT_SECONDS,
-    call_zep_read_with_retry,
-    get_zep_client,
+from ..memory import (
+    GraphExtractor, LocalGraphStore, MemoryNotFoundError, MEMORY_DRAIN_TIMEOUT_SECONDS,
 )
+from ..memory.models import NewEpisode
 
 logger = get_logger('mirofish.zep_graph_memory_updater')
 
@@ -206,15 +205,15 @@ class AgentActivity:
 
 class _DrainDeadlineExceeded(TimeoutError):
     def __init__(self, processed_count: int):
-        super().__init__("Zep updater drain deadline elapsed")
+        super().__init__("Local memory updater drain deadline elapsed")
         self.processed_count = processed_count
 
 
 class ZepGraphMemoryUpdater:
     """
-    Zep图谱记忆更新器
+    本地记忆图谱记忆更新器
     
-    监控模拟的actions日志文件，将新的agent活动实时更新到Zep图谱中。
+    监控模拟的actions日志文件，将新的agent活动实时更新到本地记忆图谱中。
     按平台分组，每累积BATCH_SIZE条活动后批量发送到Zep。
     
     所有有意义的行为都会被更新到Zep，action_args中会包含完整的上下文信息：
@@ -240,28 +239,14 @@ class ZepGraphMemoryUpdater:
     # for future source formatting changes.
     MAX_EPISODE_CHARS = 9_500
     
-    def __init__(
-        self,
-        graph_id: str,
-        api_key: Optional[str] = None,
-        simulation_id: Optional[str] = None,
-    ):
-        """
-        初始化更新器
-        
-        Args:
-            graph_id: Zep图谱ID
-            api_key: Zep API Key（可选，默认从配置读取）
-        """
+    def __init__(self, graph_id, simulation_id=None, *, store=None, extractor=None):
         self.graph_id = graph_id
         self.simulation_id = simulation_id or "unknown"
-        self.api_key = api_key or Config.ZEP_API_KEY
-        
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY未配置")
-        
-        self.client = get_zep_client(self.api_key)
-        
+        self.store = store if store is not None else LocalGraphStore()
+        self.extractor = extractor if extractor is not None else GraphExtractor()
+        if not self.store.graph_exists(graph_id):
+            raise MemoryNotFoundError(f"Graph not found: {graph_id}")
+
         # 活动队列
         self._activity_queue: Queue = Queue()
         
@@ -284,7 +269,6 @@ class ZepGraphMemoryUpdater:
         self._failed_count = 0      # 发送失败的批次数
         self._skipped_count = 0     # 被过滤跳过的活动数（DO_NOTHING）
         self._failed_batches: List[Dict[str, Any]] = []
-        self._pending_episode_uuids: List[str] = []
         
         logger.info(f"ZepGraphMemoryUpdater 初始化完成: graph_id={graph_id}, batch_size={self.BATCH_SIZE}")
     
@@ -311,8 +295,8 @@ class ZepGraphMemoryUpdater:
         logger.info(f"ZepGraphMemoryUpdater 已启动: graph_id={self.graph_id}")
     
     def stop(self):
-        """Drain the worker, flush tail events, and wait for Cloud ingestion."""
-        deadline = time.time() + ZEP_INGESTION_WAIT_TIMEOUT_SECONDS
+        """Drain the worker and finish local extraction of tail events."""
+        deadline = time.time() + MEMORY_DRAIN_TIMEOUT_SECONDS
         # Serialize the accepting->closed transition with add_activity's
         # check+enqueue operation. This closes the small race where a producer
         # could enqueue after both the worker and final flush had exited.
@@ -334,11 +318,10 @@ class ZepGraphMemoryUpdater:
 
         if self._failed_batches:
             raise RuntimeError(
-                f"{len(self._failed_batches)} Zep activity batch(es) failed; "
+                f"{len(self._failed_batches)} local memory activity batch(es) failed; "
                 "simulation graph ingestion is incomplete"
             )
 
-        self._wait_for_pending_episodes(deadline=deadline)
         
         logger.info(f"ZepGraphMemoryUpdater 已停止: graph_id={self.graph_id}, "
                    f"total_activities={self._total_activities}, "
@@ -469,83 +452,51 @@ class ZepGraphMemoryUpdater:
             payloads.append((current_activities, "\n".join(current_lines)))
         return payloads
 
-    def _send_batch_activities(
-        self,
-        activities: List[AgentActivity],
-        platform: str,
-        *,
-        deadline: float | None = None,
-    ) -> int:
-        """
-        批量发送活动到Zep图谱（合并为一条文本）
-        
-        Args:
-            activities: Agent活动列表
-            platform: 平台名称
-        """
-        if not activities:
-            return 0
-
+    def _send_batch_activities(self, activities, platform, *, deadline=None):
+        """Drain each payload once; a failed extraction retains its original episode."""
         processed_count = 0
         for payload_activities, combined_text in self._build_episode_payloads(activities):
             if deadline is not None and time.time() >= deadline:
                 raise _DrainDeadlineExceeded(processed_count)
             try:
-                episode = self.client.graph.add(
-                    graph_id=self.graph_id,
-                    type="text",
-                    data=combined_text,
-                    created_at=self._to_rfc3339(payload_activities[-1].timestamp),
-                    source_description="MiroFish simulation activity batch",
-                    metadata={
-                        "source": "mirofish_simulation",
-                        "simulation_id": self.simulation_id,
-                        "platform": platform,
-                        "activity_count": len(payload_activities),
-                        "first_round": min(a.round_num for a in payload_activities),
-                        "last_round": max(a.round_num for a in payload_activities),
-                        "agent_ids": ",".join(
-                            str(value)
-                            for value in sorted({a.agent_id for a in payload_activities})
-                        ),
-                        "action_types": ",".join(
-                            value
-                            for value in sorted({a.action_type for a in payload_activities})
-                            if value
-                        ) or "unknown",
-                    },
-                )
-
-                episode_uuid = (
-                    getattr(episode, "uuid_", None)
-                    or getattr(episode, "uuid", None)
-                )
-                if not episode_uuid:
-                    raise RuntimeError("Zep graph.add returned no episode UUID")
-                self._pending_episode_uuids.append(str(episode_uuid))
+                self._write_activity_payload(payload_activities, combined_text, platform)
                 self._total_sent += 1
                 self._total_items_sent += len(payload_activities)
-                display_name = self._get_platform_display_name(platform)
-                logger.info(f"成功批量发送 {len(payload_activities)} 条{display_name}活动到图谱 {self.graph_id}")
-                logger.debug(f"批量内容预览: {combined_text[:200]}...")
-
-            except Exception as e:
-                # graph.add has no idempotency key. Replaying an ambiguous
-                # response can duplicate extracted facts, so fail closed and
-                # surface the incomplete batch to SimulationRunner.
-                logger.error(f"批量发送到Zep失败，未自动重放非幂等写入: {e}")
+            except Exception as error:
+                # Keep the existing fail-closed policy: do not replay an ambiguous write.
+                logger.error("本地记忆抽取失败，原始活动保留供排查: %s", error)
                 self._failed_count += 1
                 self._failed_batches.append({
-                    "platform": platform,
-                    "activities": payload_activities,
-                    "error": str(e),
+                    "platform": platform, "activities": payload_activities, "error": str(error),
                 })
             finally:
-                # Successes have a confirmed episode UUID; failures are kept
-                # durably in _failed_batches and must never be replayed. Either
-                # way this payload is accounted for before moving on.
                 processed_count += len(payload_activities)
         return processed_count
+
+    def _write_activity_payload(self, activities, extraction_text, platform):
+        episode_uuid = str(uuid.uuid4())
+        original_text = chr(10).join(activity.to_episode_text() for activity in activities)
+        metadata = {
+            "source": "mirofish_simulation", "simulation_id": self.simulation_id,
+            "platform": platform, "activity_count": len(activities),
+            "first_round": min(activity.round_num for activity in activities),
+            "last_round": max(activity.round_num for activity in activities),
+            "agent_ids": ",".join(str(value) for value in sorted({activity.agent_id for activity in activities})),
+            "action_types": ",".join(sorted({activity.action_type for activity in activities if activity.action_type})) or "unknown",
+            "truncated_for_extraction": original_text != extraction_text,
+        }
+        self.store.add_episodes(self.graph_id, [NewEpisode(
+            uuid=episode_uuid, source="simulation", content=original_text, metadata=metadata,
+            created_at=self._to_rfc3339(activities[-1].timestamp),
+        )])
+        try:
+            ontology = self.store.get_ontology(self.graph_id)
+            known_names = [node.name for node in self.store.list_nodes(self.graph_id)][:200]
+            extraction = self.extractor.extract(extraction_text, ontology, known_names)
+            self.store.apply_extraction(self.graph_id, episode_uuid, extraction, ontology)
+        except Exception as error:
+            self.store.mark_episode_failed(self.graph_id, episode_uuid, str(error))
+            raise
 
     @staticmethod
     def _to_rfc3339(value: str) -> str:
@@ -580,7 +531,7 @@ class ZepGraphMemoryUpdater:
             logger.info(f"发送{display_name}平台剩余的 {len(buffer)} 条活动")
             if deadline is not None and time.time() >= deadline:
                 raise TimeoutError(
-                    "Zep updater drain deadline elapsed before flushing all activities"
+                    "Local memory updater drain deadline elapsed before flushing all activities"
                 )
             try:
                 processed_count = self._send_batch_activities(
@@ -596,29 +547,6 @@ class ZepGraphMemoryUpdater:
                 with self._buffer_lock:
                     del self._platform_buffers[platform][:processed_count]
 
-    def _wait_for_pending_episodes(self, *, deadline: float | None = None) -> None:
-        pending = set(self._pending_episode_uuids)
-        if not pending:
-            return
-
-        if deadline is None:
-            deadline = time.time() + ZEP_INGESTION_WAIT_TIMEOUT_SECONDS
-        while pending:
-            if time.time() >= deadline:
-                raise TimeoutError(
-                    f"Zep simulation ingestion timed out with {len(pending)} "
-                    "episode(s) pending"
-                )
-            for episode_uuid in list(pending):
-                episode = call_zep_read_with_retry(
-                    lambda: self.client.graph.episode.get(uuid_=episode_uuid),
-                    operation_name=f"poll simulation episode {episode_uuid}",
-                )
-                if getattr(episode, "processed", False):
-                    pending.remove(episode_uuid)
-            if pending:
-                time.sleep(3)
-        self._pending_episode_uuids = []
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -632,7 +560,6 @@ class ZepGraphMemoryUpdater:
             "batches_sent": self._total_sent,            # 成功发送的批次数
             "items_sent": self._total_items_sent,        # 成功发送的活动条数
             "failed_count": self._failed_count,          # 发送失败的批次数
-            "pending_episode_count": len(self._pending_episode_uuids),
             "skipped_count": self._skipped_count,        # 被过滤跳过的活动数（DO_NOTHING）
             "queue_size": self._activity_queue.qsize(),
             "buffer_sizes": buffer_sizes,                # 各平台缓冲区大小
@@ -642,7 +569,7 @@ class ZepGraphMemoryUpdater:
 
 class ZepGraphMemoryManager:
     """
-    管理多个模拟的Zep图谱记忆更新器
+    管理多个模拟的本地记忆图谱记忆更新器
     
     每个模拟可以有自己的更新器实例
     """
@@ -657,7 +584,7 @@ class ZepGraphMemoryManager:
         
         Args:
             simulation_id: 模拟ID
-            graph_id: Zep图谱ID
+            graph_id: 本地记忆图谱ID
             
         Returns:
             ZepGraphMemoryUpdater实例
