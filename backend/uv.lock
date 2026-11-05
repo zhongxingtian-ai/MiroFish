@@ -994,12 +994,10 @@ dependencies = [
     { name = "charset-normalizer" },
     { name = "flask" },
     { name = "flask-cors" },
-    { name = "httpx" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
-    { name = "zep-cloud" },
 ]
 
 [package.optional-dependencies]
@@ -1023,7 +1021,6 @@ requires-dist = [
     { name = "charset-normalizer", specifier = ">=3.0.0" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "flask-cors", specifier = ">=6.0.0" },
-    { name = "httpx", specifier = ">=0.27.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pipreqs", marker = "extra == 'dev'", specifier = ">=0.5.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1031,7 +1028,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "zep-cloud", specifier = "==3.25.0" },
 ]
 provides-extras = ["dev"]
 
@@ -2773,20 +2769,4 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d4/c8/cc640404a0981e6c14e2044fc64e43b4c1ddf69e7dddc8f2a02638ba5ae8/yarg-0.1.9.tar.gz", hash = "sha256:55695bf4d1e3e7f756496c36a69ba32c40d18f821e38f61d028f6049e5e15911", size = 11988, upload-time = "2014-08-11T22:01:37.243Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/90/89a2ff242ccab6a24fbab18dbbabc67c51a6f0ed01f9a0f41689dc177419/yarg-0.1.9-py2.py3-none-any.whl", hash = "sha256:4f9cebdc00fac946c9bf2783d634e538a71c7d280a4d806d45fd4dc0ef441492", size = 19162, upload-time = "2014-08-11T22:01:41.104Z" },
-]
-
-[[package]]
-name = "zep-cloud"
-version = "3.25.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "python-dateutil" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/81/0d/7a866e1e1e5f0f1353eedf3d0e17df9b3cf362c494bccd41eb121b49c43f/zep_cloud-3.25.0.tar.gz", hash = "sha256:a77867e02c2a9036a20623e85d03415e237e76510b6e05ff2e9ab2cdced0aeb9", size = 94772, upload-time = "2026-07-16T00:46:43.918Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/fc/5ca2bdd20b83bd62bc2708580f756e704f69704709e0ed43e735aa590c1e/zep_cloud-3.25.0-py3-none-any.whl", hash = "sha256:94d9599038b154af9ad33cab4b4873ed9adb1bcaa48fc4c41cbd407c1a657ef5", size = 166438, upload-time = "2026-07-16T00:46:42.39Z" },
 ]

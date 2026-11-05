@@ -317,7 +317,7 @@
               <div class="detail-section">
                 <div class="detail-label">接口说明</div>
                 <div class="detail-content">
-                  基于生成的本体，将文档分块后调用 Zep API 构建知识图谱，提取实体和关系
+                  基于本体调用大模型抽取实体和关系，将原文与事实来源保存到本地 SQLite 记忆库
                 </div>
               </div>
               

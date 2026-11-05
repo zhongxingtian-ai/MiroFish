@@ -122,10 +122,15 @@ LLM_API_KEY=your_api_key
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL_NAME=qwen-plus
 
-# Zep Cloud 配置
-# 每月免费额度即可支撑简单使用：https://app.getzep.com/
-ZEP_API_KEY=your_zep_api_key
+# 本地记忆目录（可选，默认 backend/uploads/memory）
+# MEMORY_DATA_DIR=
 ```
+
+默认使用本地 SQLite 记忆库，不需要 Zep 账号、密钥、SDK，也不需要向量库或数据库服务器。每个图谱对应 backend/uploads/memory/<graph_id>.sqlite3 一个文件；可用 MEMORY_DATA_DIR 更换目录。人物、关系、文档和模拟活动原文、事实来源、批处理状态都会保存，重启后仍可读取。删除图谱会删除对应的本地记忆文件；不迁移旧 Zep Cloud 数据。
+
+检索按字面关键词和中文连续两个字匹配，不区分大小写或全半角，不理解同义词，不做向量或语义检索。空查询会报错，没有匹配就返回空；查询最长 400 字符，每类检索最多返回 50 条。图谱搜索只查人物和关系；报告工具还会按同样规则查找已处理的模拟原文，并标注事件 ID、时间和来源。未处理或失败的活动会保留供排查，不会当成已完成的报告证据。适用于每图谱几百到几千条记录，数据量较大时扫描会变慢。
+
+记忆文件保存在本机；抽取、模拟和报告仍会把所需输入发送给已配置的模型 API。请保护记忆目录并随项目备份，不要提交数据库、原始材料、.env、日志或本地任务报告。
 
 #### 2. 安装依赖
 
@@ -164,17 +169,7 @@ npm run frontend  # 仅启动前端
 
 ### 二、Docker 部署
 
-```bash
-# 1. 配置环境变量（同源码部署）
-cp .env.example .env
-
-# 2. 拉取镜像并启动
-docker compose up -d
-```
-
-默认会读取根目录下的 `.env`，并映射端口 `3000（前端）/5001（后端）`
-
-> 在 `docker-compose.yml` 中已通过注释提供加速镜像地址，可按需替换
+本 SQLite 分支按上述源码部署方式验证。现有 docker-compose.yml 引用的上游预构建镜像不包含本次改造；使用本地记忆库请按上述源码方式启动。
 
 ## 📬 更多交流
 

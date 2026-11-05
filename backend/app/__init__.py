@@ -13,6 +13,7 @@ from flask import Flask, request
 from flask_cors import CORS
 
 from .config import Config
+from .utils.storage_paths import StoragePathError
 from .utils.logger import setup_logger, get_logger
 
 
@@ -26,6 +27,10 @@ def create_app(config_class=Config):
     if hasattr(app, 'json') and hasattr(app.json, 'ensure_ascii'):
         app.json.ensure_ascii = False
     
+    @app.errorhandler(StoragePathError)
+    def invalid_storage_path(error):
+        return {"success": False, "error": str(error)}, 400
+
     # 设置日志
     logger = setup_logger('mirofish')
     

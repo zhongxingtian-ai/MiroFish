@@ -18,6 +18,7 @@ from datetime import datetime
 from enum import Enum
 
 from ..utils.logger import get_logger
+from ..utils.storage_paths import safe_child_path
 
 logger = get_logger('mirofish.simulation_ipc')
 
@@ -107,12 +108,9 @@ class SimulationIPCClient:
             simulation_dir: 模拟数据目录
         """
         self.simulation_dir = simulation_dir
-        self.commands_dir = os.path.join(simulation_dir, "ipc_commands")
-        self.responses_dir = os.path.join(simulation_dir, "ipc_responses")
+        self.commands_dir = str(safe_child_path(simulation_dir, 'ipc_commands'))
+        self.responses_dir = str(safe_child_path(simulation_dir, 'ipc_responses'))
         
-        # 确保目录存在
-        os.makedirs(self.commands_dir, exist_ok=True)
-        os.makedirs(self.responses_dir, exist_ok=True)
     
     def send_command(
         self,
@@ -143,15 +141,18 @@ class SimulationIPCClient:
             args=args
         )
         
+        os.makedirs(self.commands_dir, exist_ok=True)
+        os.makedirs(self.responses_dir, exist_ok=True)
+
         # 写入命令文件
-        command_file = os.path.join(self.commands_dir, f"{command_id}.json")
+        command_file = str(safe_child_path(self.commands_dir, f'{command_id}.json'))
         with open(command_file, 'w', encoding='utf-8') as f:
             json.dump(command.to_dict(), f, ensure_ascii=False, indent=2)
         
         logger.info(f"发送IPC命令: {command_type.value}, command_id={command_id}")
         
         # 等待响应
-        response_file = os.path.join(self.responses_dir, f"{command_id}.json")
+        response_file = str(safe_child_path(self.responses_dir, f'{command_id}.json'))
         start_time = time.time()
         
         while time.time() - start_time < timeout:
@@ -273,7 +274,7 @@ class SimulationIPCClient:
         
         通过检查 env_status.json 文件来判断
         """
-        status_file = os.path.join(self.simulation_dir, "env_status.json")
+        status_file = str(safe_child_path(self.simulation_dir, 'env_status.json'))
         if not os.path.exists(status_file):
             return False
         
@@ -300,8 +301,8 @@ class SimulationIPCServer:
             simulation_dir: 模拟数据目录
         """
         self.simulation_dir = simulation_dir
-        self.commands_dir = os.path.join(simulation_dir, "ipc_commands")
-        self.responses_dir = os.path.join(simulation_dir, "ipc_responses")
+        self.commands_dir = str(safe_child_path(simulation_dir, 'ipc_commands'))
+        self.responses_dir = str(safe_child_path(simulation_dir, 'ipc_responses'))
         
         # 确保目录存在
         os.makedirs(self.commands_dir, exist_ok=True)
@@ -322,7 +323,7 @@ class SimulationIPCServer:
     
     def _update_env_status(self, status: str):
         """更新环境状态文件"""
-        status_file = os.path.join(self.simulation_dir, "env_status.json")
+        status_file = str(safe_child_path(self.simulation_dir, 'env_status.json'))
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump({
                 "status": status,
@@ -343,7 +344,7 @@ class SimulationIPCServer:
         command_files = []
         for filename in os.listdir(self.commands_dir):
             if filename.endswith('.json'):
-                filepath = os.path.join(self.commands_dir, filename)
+                filepath = str(safe_child_path(self.commands_dir, filename))
                 command_files.append((filepath, os.path.getmtime(filepath)))
         
         command_files.sort(key=lambda x: x[1])
@@ -366,12 +367,12 @@ class SimulationIPCServer:
         Args:
             response: IPC响应
         """
-        response_file = os.path.join(self.responses_dir, f"{response.command_id}.json")
+        response_file = str(safe_child_path(self.responses_dir, f'{response.command_id}.json'))
         with open(response_file, 'w', encoding='utf-8') as f:
             json.dump(response.to_dict(), f, ensure_ascii=False, indent=2)
         
         # 删除命令文件
-        command_file = os.path.join(self.commands_dir, f"{response.command_id}.json")
+        command_file = str(safe_child_path(self.commands_dir, f'{response.command_id}.json'))
         try:
             os.remove(command_file)
         except OSError:

@@ -148,14 +148,10 @@ def init_logging_for_simulation(simulation_dir: str):
     # 禁用 OASIS 的详细日志
     disable_oasis_logging()
     
-    # 清理旧的 log 目录（如果存在）
-    old_log_dir = os.path.join(simulation_dir, "log")
-    if os.path.exists(old_log_dir):
-        import shutil
-        shutil.rmtree(old_log_dir, ignore_errors=True)
 
 
 from action_logger import SimulationLogManager, PlatformActionLogger
+from app.utils.storage_paths import safe_child_path, ipc_message_paths, PLATFORM_PROFILE_FILES
 
 try:
     from camel.models import ModelFactory
@@ -235,9 +231,9 @@ class ParallelIPCHandler:
         self.reddit_env = reddit_env
         self.reddit_agent_graph = reddit_agent_graph
         
-        self.commands_dir = os.path.join(simulation_dir, IPC_COMMANDS_DIR)
-        self.responses_dir = os.path.join(simulation_dir, IPC_RESPONSES_DIR)
-        self.status_file = os.path.join(simulation_dir, ENV_STATUS_FILE)
+        self.commands_dir = str(safe_child_path(simulation_dir, IPC_COMMANDS_DIR))
+        self.responses_dir = str(safe_child_path(simulation_dir, IPC_RESPONSES_DIR))
+        self.status_file = str(safe_child_path(simulation_dir, ENV_STATUS_FILE))
         
         # 确保目录存在
         os.makedirs(self.commands_dir, exist_ok=True)
@@ -262,7 +258,7 @@ class ParallelIPCHandler:
         command_files = []
         for filename in os.listdir(self.commands_dir):
             if filename.endswith('.json'):
-                filepath = os.path.join(self.commands_dir, filename)
+                filepath = str(safe_child_path(self.commands_dir, filename))
                 command_files.append((filepath, os.path.getmtime(filepath)))
         
         command_files.sort(key=lambda x: x[1])
@@ -286,12 +282,12 @@ class ParallelIPCHandler:
             "timestamp": datetime.now().isoformat()
         }
         
-        response_file = os.path.join(self.responses_dir, f"{command_id}.json")
+        response_file = str(safe_child_path(self.responses_dir, f'{command_id}.json'))
         with open(response_file, 'w', encoding='utf-8') as f:
             json.dump(response, f, ensure_ascii=False, indent=2)
         
         # 删除命令文件
-        command_file = os.path.join(self.commands_dir, f"{command_id}.json")
+        command_file = str(safe_child_path(self.commands_dir, f'{command_id}.json'))
         try:
             os.remove(command_file)
         except OSError:
@@ -516,7 +512,7 @@ class ParallelIPCHandler:
     
     def _get_interview_result(self, agent_id: int, platform: str) -> Dict[str, Any]:
         """从数据库获取最新的Interview结果"""
-        db_path = os.path.join(self.simulation_dir, f"{platform}_simulation.db")
+        db_path = str(safe_child_path(self.simulation_dir, f'{platform}_simulation.db'))
         
         result = {
             "agent_id": agent_id,
@@ -1130,10 +1126,9 @@ async def run_twitter_simulation(
     model = create_model(config, use_boost=False)
     
     # OASIS Twitter使用CSV格式
-    profile_path = os.path.join(simulation_dir, "twitter_profiles.csv")
+    profile_path = str(safe_child_path(simulation_dir, 'twitter_profiles.csv'))
     if not os.path.exists(profile_path):
-        log_info(f"错误: Profile文件不存在: {profile_path}")
-        return result
+        raise ValueError(f"缺少启用平台的角色文件: {profile_path}")
     
     result.agent_graph = await generate_twitter_agent_graph(
         profile_path=profile_path,
@@ -1148,7 +1143,7 @@ async def run_twitter_simulation(
         if agent_id not in agent_names:
             agent_names[agent_id] = getattr(agent, 'name', f'Agent_{agent_id}')
     
-    db_path = os.path.join(simulation_dir, "twitter_simulation.db")
+    db_path = str(safe_child_path(simulation_dir, 'twitter_simulation.db'))
     if os.path.exists(db_path):
         os.remove(db_path)
     
@@ -1321,10 +1316,9 @@ async def run_reddit_simulation(
     # Reddit 使用加速 LLM 配置（如果有的话，否则回退到通用配置）
     model = create_model(config, use_boost=True)
     
-    profile_path = os.path.join(simulation_dir, "reddit_profiles.json")
+    profile_path = str(safe_child_path(simulation_dir, 'reddit_profiles.json'))
     if not os.path.exists(profile_path):
-        log_info(f"错误: Profile文件不存在: {profile_path}")
-        return result
+        raise ValueError(f"缺少启用平台的角色文件: {profile_path}")
     
     result.agent_graph = await generate_reddit_agent_graph(
         profile_path=profile_path,
@@ -1339,7 +1333,7 @@ async def run_reddit_simulation(
         if agent_id not in agent_names:
             agent_names[agent_id] = getattr(agent, 'name', f'Agent_{agent_id}')
     
-    db_path = os.path.join(simulation_dir, "reddit_simulation.db")
+    db_path = str(safe_child_path(simulation_dir, 'reddit_simulation.db'))
     if os.path.exists(db_path):
         os.remove(db_path)
     
@@ -1489,7 +1483,7 @@ async def run_reddit_simulation(
     return result
 
 
-async def main():
+async def main(argv=None, *, platform=None):
     parser = argparse.ArgumentParser(description='OASIS双平台并行模拟')
     parser.add_argument(
         '--config', 
@@ -1520,7 +1514,16 @@ async def main():
         help='模拟完成后立即关闭环境，不进入等待命令模式'
     )
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.twitter_only and args.reddit_only:
+        parser.error("Choose only one single-platform option")
+    if platform is not None:
+        if platform not in {"twitter", "reddit"}:
+            parser.error("Unknown platform")
+        if (platform == "twitter" and args.reddit_only) or (platform == "reddit" and args.twitter_only):
+            parser.error("Platform option conflicts with the selected entry point")
+        args.twitter_only = platform == "twitter"
+        args.reddit_only = platform == "reddit"
     
     # 在 main 函数开始时创建 shutdown 事件，确保整个程序都能响应退出信号
     global _shutdown_event
@@ -1533,6 +1536,20 @@ async def main():
     config = load_config(args.config)
     simulation_dir = os.path.dirname(args.config) or "."
     wait_for_commands = not args.no_wait
+
+    # Standalone CLI calls must not bypass the backend's explicit-force boundary.
+    previous_records = (
+        "twitter/actions.jsonl", "reddit/actions.jsonl",
+        "twitter_simulation.db", "reddit_simulation.db", ENV_STATUS_FILE,
+    )
+    if any(os.path.exists(str(safe_child_path(simulation_dir, name))) for name in previous_records) or ipc_message_paths(simulation_dir):
+        raise ValueError("已有模拟运行数据；请使用新的目录，或在应用内显式使用 force=true 重跑")
+
+    selected = {"twitter": not args.reddit_only, "reddit": not args.twitter_only}
+    missing = [filename for name, filename in PLATFORM_PROFILE_FILES.items()
+               if selected[name] and not safe_child_path(simulation_dir, filename).is_file()]
+    if missing:
+        raise ValueError("缺少启用平台的角色文件: " + ", ".join(missing))
     
     # 初始化日志配置（禁用 OASIS 日志，清理旧文件）
     init_logging_for_simulation(simulation_dir)
@@ -1644,9 +1661,9 @@ async def main():
     log_manager.info("=" * 60)
     log_manager.info(f"全部完成!")
     log_manager.info(f"日志文件:")
-    log_manager.info(f"  - {os.path.join(simulation_dir, 'simulation.log')}")
-    log_manager.info(f"  - {os.path.join(simulation_dir, 'twitter', 'actions.jsonl')}")
-    log_manager.info(f"  - {os.path.join(simulation_dir, 'reddit', 'actions.jsonl')}")
+    log_manager.info(f"  - {str(safe_child_path(simulation_dir, 'simulation.log'))}")
+    log_manager.info(f"  - {str(safe_child_path(simulation_dir, 'twitter', 'actions.jsonl'))}")
+    log_manager.info(f"  - {str(safe_child_path(simulation_dir, 'reddit', 'actions.jsonl'))}")
     log_manager.info("=" * 60)
 
 
@@ -1681,10 +1698,10 @@ def setup_signal_handlers(loop=None):
     signal.signal(signal.SIGINT, signal_handler)
 
 
-if __name__ == "__main__":
+def cli(platform=None):
     setup_signal_handlers()
     try:
-        asyncio.run(main())
+        asyncio.run(main(platform=platform))
     except KeyboardInterrupt:
         print("\n程序被中断")
     except SystemExit:
@@ -1697,3 +1714,7 @@ if __name__ == "__main__":
         except Exception:
             pass
         print("模拟进程已退出")
+
+
+if __name__ == "__main__":
+    cli()

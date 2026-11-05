@@ -286,7 +286,7 @@ def test_report_reader_lease_blocks_graph_start_and_delete(monkeypatch):
         assert runner_calls == []
 
         with pytest.raises(graph_api.GraphInUseError, match=f"report:{report_id}"):
-            graph_api._delete_cloud_graph_if_present("graph-1")
+            graph_api._delete_memory_graph_if_present("graph-1")
 
         # Let the parked background report finish; its finally block must
         # release the lease even if report generation fails.

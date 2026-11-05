@@ -5,6 +5,7 @@ from queue import Queue
 import pytest
 
 from app.services import zep_graph_memory_updater as updater_module
+from app.memory.models import Extraction
 from app.services.zep_graph_memory_updater import (
     AgentActivity,
     ZepGraphMemoryManager,
@@ -24,24 +25,27 @@ def _activity(index=1, content="hello"):
     )
 
 
-def _client(add):
-    return SimpleNamespace(
-        graph=SimpleNamespace(
-            add=add,
-            episode=SimpleNamespace(
-                get=lambda **_kwargs: SimpleNamespace(processed=True)
-            ),
-        )
-    )
 
 
 def _updater(monkeypatch, add, simulation_id="sim-1"):
-    client = _client(add)
-    monkeypatch.setattr(updater_module, "get_zep_client", lambda _key: client)
+    def add_episodes(graph_id, episodes):
+        for episode in episodes:
+            add(uuid=episode.uuid, source=episode.source, content=episode.content,
+                metadata=episode.metadata, created_at=episode.created_at)
+        return [episode.uuid for episode in episodes]
+    store = SimpleNamespace(
+        graph_exists=lambda graph_id: True, add_episodes=add_episodes,
+        get_ontology=lambda graph_id: {"entity_types": [], "edge_types": []},
+        list_nodes=lambda graph_id: [], apply_extraction=lambda *args: None,
+        mark_episode_failed=lambda *args: None,
+    )
+    texts = []
+    def extract(text, ontology, known_names):
+        texts.append(text)
+        return Extraction((), ())
     updater = ZepGraphMemoryUpdater(
-        "graph-1",
-        api_key="test-key",
-        simulation_id=simulation_id,
+        "graph-1", simulation_id=simulation_id, store=store,
+        extractor=SimpleNamespace(extract=extract, texts=texts),
     )
     updater.SEND_INTERVAL = 0
     return updater
@@ -98,9 +102,11 @@ def test_activity_episode_has_provenance_time_and_a_safe_size(monkeypatch):
 
     assert len(writes) == 1
     write = writes[0]
-    assert len(write["data"]) <= updater.MAX_EPISODE_CHARS
+    assert len(write["content"]) > updater.MAX_EPISODE_CHARS
+    assert len(updater.extractor.texts[0]) <= updater.MAX_EPISODE_CHARS
     assert write["created_at"] == "2026-07-22T12:00:00+08:00"
-    assert write["source_description"] == "MiroFish simulation activity batch"
+    assert write["source"] == "simulation"
+    assert write["metadata"]["truncated_for_extraction"] is True
     assert write["metadata"]["simulation_id"] == "sim-provenance"
     assert write["metadata"]["platform"] == "twitter"
     assert write["metadata"]["activity_count"] == 1
@@ -177,22 +183,6 @@ def test_stop_cannot_finish_between_acceptance_check_and_enqueue(monkeypatch):
     assert len(writes) == 1
 
 
-def test_pending_episode_wait_has_a_deadline(monkeypatch):
-    updater = _updater(
-        monkeypatch,
-        lambda **_kwargs: SimpleNamespace(uuid_="episode-1"),
-    )
-    updater._pending_episode_uuids = ["episode-1"]
-    updater.client.graph.episode.get = lambda **_kwargs: SimpleNamespace(
-        processed=False
-    )
-    timestamps = iter([0.0, 2.0])
-    monkeypatch.setattr(updater_module, "ZEP_INGESTION_WAIT_TIMEOUT_SECONDS", 1)
-    monkeypatch.setattr(updater_module.time, "time", lambda: next(timestamps))
-    monkeypatch.setattr(updater_module.time, "sleep", lambda _seconds: None)
-
-    with pytest.raises(TimeoutError, match="pending"):
-        updater._wait_for_pending_episodes()
 
 
 def test_explicit_graph_destruction_can_discard_a_stopped_failed_updater():

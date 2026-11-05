@@ -516,7 +516,7 @@ const fetchRunStatus = async () => {
       const isFailed = data.runner_status === 'failed'
       
       // runner_status is authoritative because the backend only publishes a
-      // terminal state after the Zep ingestion barrier has completed.
+      // terminal state after the local memory ingestion barrier has completed.
       if (isFailed) {
         addLog(t('log.simFailed') + (data.error ? `: ${data.error}` : ''))
         phase.value = 2
